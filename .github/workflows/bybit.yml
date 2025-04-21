@@ -42,7 +42,7 @@ jobs:
 
         message = Mail(
             from_email="jason.kek@liquidx.studio",     # Replace with your verified sender
-            to_emails="jason.kek@liquidx.studio",      # Where you want the alert sent
+            to_emails=["jason.kek@liquidx.studio", "ettore@liquidx.studio"],
             subject="📈 Bybit Market Data (Last 7 Days)",
             html_content="<strong>Latest 7-day MONUSDT market data is attached.</strong>"
         )
