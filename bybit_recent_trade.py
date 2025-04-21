@@ -4,6 +4,10 @@ import datetime
 from pybit.unified_trading import HTTP
 import requests
 
+BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
+BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+
 # ---- CONFIG ----
 BYBIT_API_KEY = "3wn4lzTEtKF595utDe"
 BYBIT_API_SECRET = "dgSAVZpHtTuurQe6WyUDXivGzS3eZcRKKYTj"
