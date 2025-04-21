@@ -41,7 +41,7 @@ jobs:
             encoded = base64.b64encode(data).decode()
 
         message = Mail(
-            from_email="bybit@email.com",     # Replace with your verified sender
+            from_email="jason.kek@liquidx.studio",     # Replace with your verified sender
             to_emails="jason.kek@liquidx.studio",      # Where you want the alert sent
             subject="📈 Bybit Market Data (Last 7 Days)",
             html_content="<strong>Latest 7-day MONUSDT market data is attached.</strong>"
