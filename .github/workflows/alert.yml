@@ -28,4 +28,4 @@ jobs:
         BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
         BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
       run: |
-        python monusdt_alert.py
+        python bybit_recent_trade.py
