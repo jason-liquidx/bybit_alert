@@ -2,8 +2,8 @@ name: Bybit Automation
 
 on:
   schedule:
-    - cron: '0 22,10 * * *'  # 6AM & 6PM MYT (10AM & 10PM UTC)
-  workflow_dispatch:  # Allow manual runs
+    - cron: '0 22,10 * * *'  # Every 12 hours
+  workflow_dispatch:
 
 jobs:
   run-bybit-script:
@@ -21,6 +21,44 @@ jobs:
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
+        pip install sendgrid
 
     - name: Run Bybit Script
       run: python bybit_data_aggregator.py
+
+    - name: Email results with SendGrid
+      env:
+        SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+      run: |
+        echo '
+        import os
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+        import base64
+
+        with open("aggregated_by_day_bybit_data.csv", "rb") as f:
+            data = f.read()
+            encoded = base64.b64encode(data).decode()
+
+        message = Mail(
+            from_email="your@email.com",     # Replace with your verified sender
+            to_emails="your@email.com",      # Where you want the alert sent
+            subject="📈 Bybit Market Data (Last 7 Days)",
+            html_content="<strong>Latest 7-day MONUSDT market data is attached.</strong>"
+        )
+
+        attachment = Attachment(
+            FileContent(encoded),
+            FileName("bybit_data.csv"),
+            FileType("text/csv"),
+            Disposition("attachment")
+        )
+        message.attachment = attachment
+
+        try:
+            sg = SendGridAPIClient(os.environ.get("SENDGRID_API_KEY"))
+            response = sg.send(message)
+            print("✅ Email sent:", response.status_code)
+        except Exception as e:
+            print("❌ Email error:", e)
+        ' > send_email.py && python send_email.py
