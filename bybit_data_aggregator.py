@@ -1,99 +1,103 @@
-import requests
-import os
 import pandas as pd
-from datetime import datetime, timedelta
+from collections import defaultdict
+import datetime
+from pybit.unified_trading import HTTP
+import requests
 
-# Base URL for the Bybit Spot data
-base_url = "https://public.bybit.com/spot/MONUSDT/"
+# ---- CONFIG ----
+BYBIT_API_KEY = "3wn4lzTEtKF595utDe"
+BYBIT_API_SECRET = "dgSAVZpHtTuurQe6WyUDXivGzS3eZcRKKYTj"
+SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/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"  # 🔁 Replace with your Slack webhook
 
-# Directory to store downloaded files
-output_dir = 'bybit_spot_data/'
-os.makedirs(output_dir, exist_ok=True)
+# ---- STEP 1: Fetch Public Trade Data ----
+session = HTTP(
+    testnet=False,
+    api_key=BYBIT_API_KEY,
+    api_secret=BYBIT_API_SECRET
+)
 
-# Output CSV file
-output_csv = 'aggregated_by_day_bybit_data.csv'
+response = session.get_public_trade_history(
+    category="spot",
+    symbol="MONUSDT",
+    limit=1000  # Max allowed
+)
 
-# Function to download the file for a specific date
-def download_file(date):
-    url = f"{base_url}MONUSDT_{date}.csv.gz"
-    response = requests.get(url)
+trades = response.get("result", {}).get("list", [])
+
+# ---- STEP 2: Aggregate Per Minute ----
+grouped = defaultdict(lambda: {
+    "buy_volume": 0.0,
+    "sell_volume": 0.0,
+    "total_volume": 0.0,
+    "price_volume": 0.0,
+    "buy_count": 0,
+    "sell_count": 0
+})
+
+for trade in trades:
+    ts = int(trade["time"]) // 1000  # Convert to seconds
+    minute = ts - (ts % 60)  # Round to nearest minute
+    side = trade["side"]
+    qty = float(trade["size"])
+    price = float(trade["price"])
+    entry = grouped[minute]
+
+    if side == "Buy":
+        entry["buy_volume"] += qty
+        entry["buy_count"] += 1
+    elif side == "Sell":
+        entry["sell_volume"] += qty
+        entry["sell_count"] += 1
+
+    entry["total_volume"] += qty
+    entry["price_volume"] += qty * price
+
+# ---- STEP 3: Convert to DataFrame ----
+rows = []
+for ts, data in grouped.items():
+    dt = datetime.datetime.fromtimestamp(ts)
+    total_trades = data["buy_count"] + data["sell_count"]
+    avg_price = data["price_volume"] / data["total_volume"] if data["total_volume"] else 0
+    usd_volume = avg_price * data["total_volume"]
+    rows.append({
+        "timestamp": dt,
+        "buy_volume": round(data["buy_volume"], 2),
+        "sell_volume": round(data["sell_volume"], 2),
+        "price": round(avg_price, 4),
+        "usd_volume": round(usd_volume, 2),
+        "trade_count": total_trades
+    })
+
+df = pd.DataFrame(rows).sort_values("timestamp")
+
+# ---- STEP 4: Calculate Summary ----
+if not df.empty:
+    start_time = df["timestamp"].min()
+    end_time = df["timestamp"].max()
+    total_minutes = int((end_time - start_time).total_seconds() / 60)
+    active_minutes = df["timestamp"].dt.floor("min").nunique()
+    trading_freq_pct = (active_minutes / total_minutes) * 100 if total_minutes > 0 else 0
+
+    summary = {
+        "Start Time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "End Time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "Total Buy Volume": round(df["buy_volume"].sum(), 2),
+        "Total Sell Volume": round(df["sell_volume"].sum(), 2),
+        "Total USD Volume": round(df["usd_volume"].sum(), 2),
+        "Trading Frequency %": round(trading_freq_pct, 2)
+    }
+
+    # ---- STEP 5: Send Slack Alert ----
+    slack_message = "*MONUSDT Spot Trade Summary*\n"
+    for k, v in summary.items():
+        slack_message += f"> *{k}*: `{v}`\n"
+
+    slack_payload = {"text": slack_message}
+    response = requests.post(SLACK_WEBHOOK_URL, json=slack_payload)
 
     if response.status_code == 200:
-        file_path = os.path.join(output_dir, f"MONUSDT_{date}.csv.gz")
-        with open(file_path, 'wb') as f:
-            f.write(response.content)
-        print(f"✅ Downloaded {url}")
-        return file_path
-    elif response.status_code == 404:
-        print(f"⏭️ File not found for {date}. Skipping.")
-        return None
+        print("✅ Slack alert sent.")
     else:
-        print(f"❌ Error for {date}: Status Code {response.status_code}")
-        return None
-
-# Function to process and aggregate data
-def process_and_aggregate(file_path):
-    try:
-        df = pd.read_csv(file_path)
-
-        # Convert 'timestamp' to datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-
-        # Create 'date' column
-        df['date'] = df['timestamp'].dt.date
-
-        # Calculate buy/sell volumes
-        df['buy_volume'] = df.apply(lambda x: float(x['volume']) if x['side'] == 'buy' else 0, axis=1)
-        df['sell_volume'] = df.apply(lambda x: float(x['volume']) if x['side'] == 'sell' else 0, axis=1)
-
-        # Extract minute-level activity
-        if 'minute' not in df.columns:
-            df['minute'] = df['timestamp'].dt.floor('min')
-
-        # Count unique active minutes per day
-        active_minutes_per_day = df.groupby('date')['minute'].nunique().reset_index(name='active_minutes')
-
-        # Aggregate volume + price per day
-        agg_df = df.groupby('date').agg(
-            buy_volume_sum=('buy_volume', 'sum'),
-            sell_volume_sum=('sell_volume', 'sum'),
-            avg_price=('price', 'mean')
-        ).reset_index()
-
-        # Merge with active_minutes
-        result = pd.merge(agg_df, active_minutes_per_day, on='date', how='left')
-
-        # Calculate trading frequency (active minutes / total minutes in day)
-        result['trading_frequency_pct'] = result['active_minutes'] / (24 * 60) * 100
-
-        return result
-
-    except Exception as e:
-        print(f"⚠️ Error processing {file_path}: {e}")
-        return pd.DataFrame()
-
-# Get the past 7 days from today
-end_date = datetime.now()
-start_date = end_date - timedelta(days=6)  # Last 7 days = today and previous 6
-
-# Final DataFrame
-all_data = pd.DataFrame()
-
-# Loop through each date
-current_date = start_date
-while current_date <= end_date:
-    date_str = current_date.strftime('%Y-%m-%d')
-    file_path = download_file(date_str)
-
-    if file_path:
-        day_data = process_and_aggregate(file_path)
-        all_data = pd.concat([all_data, day_data], ignore_index=True)
-
-    current_date += timedelta(days=1)
-
-# Save to CSV
-if not all_data.empty:
-    all_data.to_csv(output_csv, index=False)
-    print(f"✅ Aggregated data saved to {output_csv}")
+        print(f"⚠️ Slack error: {response.status_code} - {response.text}")
 else:
-    print("⚠️ No data to save.")
+    print("⚠️ No data available to summarize.")
